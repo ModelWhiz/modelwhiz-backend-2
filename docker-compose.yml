@@ -1,0 +1,109 @@
+# FILE: docker-compose.yml
+
+services:
+  # Main FastAPI application
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://modelwhiz_user:modelwhiz_password@db:5432/modelwhiz_db
+      - REDIS_URL=redis://:modelwhiz_redis_password@redis:6379
+      - REDIS_BROKER_URL=redis://:modelwhiz_redis_password@redis:6379/0
+      - REDIS_RESULT_BACKEND=redis://:modelwhiz_redis_password@redis:6379/1
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ./uploads:/app/uploads
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+  # Celery worker for background tasks
+  celery-worker:
+    build: .
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=4 -Q ml_tasks,maintenance,default
+    environment:
+      - DATABASE_URL=postgresql://modelwhiz_user:modelwhiz_password@db:5432/modelwhiz_db
+      - REDIS_URL=redis://:modelwhiz_redis_password@redis:6379
+      - REDIS_BROKER_URL=redis://:modelwhiz_redis_password@redis:6379/0
+      - REDIS_RESULT_BACKEND=redis://:modelwhiz_redis_password@redis:6379/1
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+
+  # Celery beat for scheduled tasks
+  celery-beat:
+    build: .
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://modelwhiz_user:modelwhiz_password@db:5432/modelwhiz_db
+      - REDIS_URL=redis://:modelwhiz_redis_password@redis:6379
+      - REDIS_BROKER_URL=redis://:modelwhiz_redis_password@redis:6379/0
+      - REDIS_RESULT_BACKEND=redis://:modelwhiz_redis_password@redis:6379/1
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - LOG_LEVEL=INFO
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+
+  # PostgreSQL database
+  db:
+    image: postgres:13-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: modelwhiz_user
+      POSTGRES_PASSWORD: modelwhiz_password
+      POSTGRES_DB: modelwhiz_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U modelwhiz_user -d modelwhiz_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis for Celery broker and result backend
+  redis:
+    image: redis:7-alpine
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --requirepass modelwhiz_redis_password --appendonly yes --protected-mode no
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "modelwhiz_redis_password", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  postgres_data:
+  redis_data:
